@@ -20,6 +20,7 @@ _BG = '#0a0a14'
 _CYAN = '#00ccff'
 _GREEN = '#26a69a'
 _RED = '#ef5350'
+_YELLOW = '#ffd700'
 _WHITE = '#e0e0e0'
 _GRAY = '#555555'
 _FONT = 'Consolas'
@@ -165,7 +166,76 @@ class TradeRecorderWindow(QWidget):
         self._conn_label.setFont(QFont(_FONT, 9))
         layout.addWidget(self._conn_label)
 
+        # ── Verify / Search Panel ──
+        verify_group = QGroupBox('Trade Verification / Search')
+        verify_layout = QVBoxLayout(verify_group)
+
+        # Row 1: Price + Qty + Time range
+        vrow1 = QHBoxLayout()
+        vrow1.addWidget(QLabel('Price:'))
+        self._v_price = QLineEdit()
+        self._v_price.setFixedWidth(90)
+        self._v_price.setPlaceholderText('e.g. 2.51')
+        vrow1.addWidget(self._v_price)
+
+        vrow1.addWidget(QLabel('Qty:'))
+        self._v_qty = QLineEdit()
+        self._v_qty.setFixedWidth(80)
+        self._v_qty.setPlaceholderText('e.g. 12632')
+        vrow1.addWidget(self._v_qty)
+
+        vrow1.addWidget(QLabel('Side:'))
+        self._v_side = QComboBox()
+        self._v_side.addItems(['Any', 'buy', 'sell'])
+        self._v_side.setFixedWidth(60)
+        vrow1.addWidget(self._v_side)
+
+        vrow1.addWidget(QLabel('Min USD:'))
+        self._v_min_usd = QLineEdit()
+        self._v_min_usd.setFixedWidth(80)
+        self._v_min_usd.setPlaceholderText('e.g. 10000')
+        vrow1.addWidget(self._v_min_usd)
+
+        vrow1.addStretch()
+        verify_layout.addLayout(vrow1)
+
+        # Row 2: Tolerance + buttons
+        vrow2 = QHBoxLayout()
+        vrow2.addWidget(QLabel('Price tolerance:'))
+        self._v_tol = QLineEdit('0.5')
+        self._v_tol.setFixedWidth(50)
+        self._v_tol.setToolTip('Price match tolerance in %')
+        vrow2.addWidget(self._v_tol)
+        vrow2.addWidget(QLabel('%'))
+
+        self._btn_verify = QPushButton('Verify Trade')
+        self._btn_verify.setStyleSheet(
+            f'background: #1a3a1a; color: {_GREEN}; border: 1px solid {_GREEN};'
+            f' font-weight: bold; padding: 6px 14px;')
+        self._btn_verify.clicked.connect(self._verify_trade)
+        vrow2.addWidget(self._btn_verify)
+
+        self._btn_show_large = QPushButton('Show Large (>$10K)')
+        self._btn_show_large.clicked.connect(self._show_large_trades)
+        vrow2.addWidget(self._btn_show_large)
+
+        self._btn_show_all = QPushButton('Show All')
+        self._btn_show_all.clicked.connect(self._show_all_trades)
+        vrow2.addWidget(self._btn_show_all)
+
+        vrow2.addStretch()
+        verify_layout.addLayout(vrow2)
+
+        # Verify result
+        self._verify_result = QLabel('')
+        self._verify_result.setWordWrap(True)
+        self._verify_result.setFont(QFont(_FONT, 9))
+        verify_layout.addWidget(self._verify_result)
+
+        layout.addWidget(verify_group)
+
         # ── Recent Trades Table ──
+        self._filtered_trades = None  # None = show recent, list = filtered
         self._table = QTableWidget(0, 8)
         self._table.setHorizontalHeaderLabels(
             ['Time', 'Exchange', 'Symbol', 'Trade ID', 'Price', 'Qty', 'Side', 'USD'])
@@ -288,11 +358,14 @@ class TradeRecorderWindow(QWidget):
                 parts.append(f'<span style="color:{_RED}">○ {name}</span>')
         self._conn_label.setText('  '.join(parts))
 
-        # Update table (last 50)
-        recent = self._recorder.get_recent(50)
-        self._table.setRowCount(len(recent))
-        for i, t in enumerate(reversed(recent)):
-            row = i
+        # Update table
+        if self._filtered_trades is not None:
+            trades = self._filtered_trades
+        else:
+            trades = list(reversed(self._recorder.get_recent(50)))
+
+        self._table.setRowCount(len(trades))
+        for row, t in enumerate(trades):
             self._table.setItem(row, 0, QTableWidgetItem(t['datetime']))
             self._table.setItem(row, 1, QTableWidgetItem(t['exchange']))
             self._table.setItem(row, 2, QTableWidgetItem(t['symbol']))
@@ -306,7 +379,127 @@ class TradeRecorderWindow(QWidget):
             side_item.setForeground(QColor(_GREEN) if t['side'] == 'buy' else QColor(_RED))
             self._table.setItem(row, 6, side_item)
 
-            self._table.setItem(row, 7, QTableWidgetItem(f"${t['usd_value']:,.2f}"))
+            usd = t['usd_value']
+            usd_item = QTableWidgetItem(f"${usd:,.2f}")
+            # Large trade highlight
+            if usd >= 100_000:
+                usd_item.setForeground(QColor('#ff1744'))
+                usd_item.setFont(QFont(_FONT, 10, QFont.Weight.Bold))
+            elif usd >= 10_000:
+                usd_item.setForeground(QColor(_YELLOW))
+                usd_item.setFont(QFont(_FONT, 10, QFont.Weight.Bold))
+            self._table.setItem(row, 7, usd_item)
+
+    def _verify_trade(self):
+        """交易驗證 — 搜尋匹配的成交紀錄."""
+        with self._recorder._lock:
+            all_trades = list(self._recorder._trades)
+
+        if not all_trades:
+            self._verify_result.setText(
+                '<span style="color:#ef5350">No trades recorded yet. '
+                'Start recording first.</span>')
+            return
+
+        # 解析搜尋條件
+        price_str = self._v_price.text().strip()
+        qty_str = self._v_qty.text().strip()
+        side_filter = self._v_side.currentText()
+        min_usd_str = self._v_min_usd.text().strip()
+        tol_str = self._v_tol.text().strip()
+
+        target_price = float(price_str) if price_str else 0
+        target_qty = float(qty_str) if qty_str else 0
+        min_usd = float(min_usd_str) if min_usd_str else 0
+        tol_pct = float(tol_str) if tol_str else 0.5
+
+        # 篩選
+        matches = []
+        for t in all_trades:
+            # Side filter
+            if side_filter != 'Any' and t['side'] != side_filter:
+                continue
+            # Min USD filter
+            if min_usd > 0 and t['usd_value'] < min_usd:
+                continue
+            # Price match (within tolerance %)
+            if target_price > 0:
+                diff_pct = abs(t['price'] - target_price) / target_price * 100
+                if diff_pct > tol_pct:
+                    continue
+            # Qty match (within 10%)
+            if target_qty > 0:
+                diff_qty = abs(t['qty'] - target_qty) / target_qty * 100
+                if diff_qty > 10:
+                    continue
+            matches.append(t)
+
+        # 顯示結果
+        if matches:
+            # 統計
+            total_usd = sum(m['usd_value'] for m in matches)
+            exchanges = set(m['exchange'] for m in matches)
+            buy_ct = sum(1 for m in matches if m['side'] == 'buy')
+            sell_ct = sum(1 for m in matches if m['side'] == 'sell')
+            largest = max(matches, key=lambda m: m['usd_value'])
+
+            self._verify_result.setText(
+                f'<span style="color:{_GREEN}">'
+                f'FOUND {len(matches)} matching trades | '
+                f'Total: ${total_usd:,.2f} | '
+                f'Buy: {buy_ct} Sell: {sell_ct} | '
+                f'Exchanges: {", ".join(exchanges)} | '
+                f'Largest: ${largest["usd_value"]:,.2f} @ {largest["exchange"]}'
+                f'</span>')
+
+            # 在表格顯示匹配結果
+            self._filtered_trades = list(reversed(matches))
+        else:
+            conditions = []
+            if target_price > 0:
+                conditions.append(f'price=${target_price} +/-{tol_pct}%')
+            if target_qty > 0:
+                conditions.append(f'qty={target_qty} +/-10%')
+            if side_filter != 'Any':
+                conditions.append(f'side={side_filter}')
+            if min_usd > 0:
+                conditions.append(f'min ${min_usd:,.0f}')
+
+            self._verify_result.setText(
+                f'<span style="color:{_RED}">'
+                f'NO MATCH found in {len(all_trades):,} trades. '
+                f'Conditions: {", ".join(conditions) or "none"} | '
+                f'Trade may be FAKE or not recorded during this session.'
+                f'</span>')
+            self._filtered_trades = []
+
+    def _show_large_trades(self):
+        """顯示所有 > $10K 的大單."""
+        with self._recorder._lock:
+            all_trades = list(self._recorder._trades)
+
+        large = [t for t in all_trades if t['usd_value'] >= 10_000]
+        large.sort(key=lambda t: t['usd_value'], reverse=True)
+
+        if large:
+            total = sum(t['usd_value'] for t in large)
+            self._verify_result.setText(
+                f'<span style="color:{_YELLOW}">'
+                f'{len(large)} large trades (>$10K) | '
+                f'Total: ${total:,.0f} | '
+                f'Largest: ${large[0]["usd_value"]:,.0f} '
+                f'@ {large[0]["exchange"]} {large[0]["symbol"]}'
+                f'</span>')
+            self._filtered_trades = large
+        else:
+            self._verify_result.setText(
+                f'<span style="color:{_GRAY}">No trades >$10K found</span>')
+            self._filtered_trades = []
+
+    def _show_all_trades(self):
+        """回到即時模式（最新 50 筆）."""
+        self._filtered_trades = None
+        self._verify_result.setText('')
 
     def closeEvent(self, event):
         self._timer.stop()
