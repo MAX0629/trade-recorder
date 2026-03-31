@@ -3,10 +3,10 @@
 
 a = Analysis(
     ['main.py'],
-    pathex=[],
+    pathex=['.'],
     binaries=[],
     datas=[],
-    hiddenimports=['websockets', 'orjson', 'gzip', 'zlib'],
+    hiddenimports=['websockets', 'orjson', 'gzip', 'zlib', 'recorder', 'window'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

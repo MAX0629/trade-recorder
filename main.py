@@ -7,7 +7,13 @@ Usage:
     python main.py
 """
 import sys
+import os
 import logging
+
+# Ensure module directory is in path (for both source and frozen EXE)
+_dir = os.path.dirname(os.path.abspath(__file__))
+if _dir not in sys.path:
+    sys.path.insert(0, _dir)
 
 
 def main():
