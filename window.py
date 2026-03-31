@@ -87,11 +87,12 @@ class TradeRecorderWindow(QWidget):
         config_group = QGroupBox('Configuration')
         config_layout = QVBoxLayout(config_group)
 
-        # Row 1: Symbol
+        # Row 1: Symbols (comma-separated)
         row1 = QHBoxLayout()
-        row1.addWidget(QLabel('Symbol:'))
-        self._symbol_input = QLineEdit('BTCUSDT')
-        self._symbol_input.setFixedWidth(120)
+        row1.addWidget(QLabel('Symbols:'))
+        self._symbol_input = QLineEdit('BTCUSDT,ETHUSDT,SOLUSDT')
+        self._symbol_input.setFixedWidth(300)
+        self._symbol_input.setPlaceholderText('e.g. BTCUSDT,ETHUSDT,SOLUSDT')
         row1.addWidget(self._symbol_input)
         row1.addStretch()
         config_layout.addLayout(row1)
@@ -181,8 +182,11 @@ class TradeRecorderWindow(QWidget):
         layout.addWidget(self._table)
 
     def _start_recording(self):
-        symbol = self._symbol_input.text().strip().upper()
-        if not symbol:
+        raw = self._symbol_input.text().strip().upper()
+        if not raw:
+            return
+        symbols = [s.strip() for s in raw.split(',') if s.strip()]
+        if not symbols:
             return
 
         selected = [ex_id for ex_id, cb in self._exchange_checks.items()
@@ -193,11 +197,12 @@ class TradeRecorderWindow(QWidget):
         # 清掉舊的 workers
         self._stop_workers()
 
-        # 啟動新 workers
+        # 每個交易所 × 每個幣種 = 一個 worker
         for ex_id in selected:
-            w = RecorderWorker(self._recorder, ex_id, symbol)
-            w.start()
-            self._workers.append(w)
+            for symbol in symbols:
+                w = RecorderWorker(self._recorder, ex_id, symbol)
+                w.start()
+                self._workers.append(w)
 
         self._btn_start.setEnabled(False)
         self._btn_stop.setEnabled(True)
@@ -249,9 +254,9 @@ class TradeRecorderWindow(QWidget):
         count = self._recorder.get_count()
         if count == 0:
             return
-        sym = self._symbol_input.text().strip() or 'UNKNOWN'
+        raw = self._symbol_input.text().strip().replace(',', '_') or 'UNKNOWN'
         ts = time.strftime('%Y%m%d_%H%M%S')
-        filepath = os.path.join('data', f'trades_{sym}_{ts}.csv')
+        filepath = os.path.join('data', f'trades_{raw}_{ts}.csv')
         os.makedirs('data', exist_ok=True)
         n = self._recorder.export_csv(filepath)
         self._stats_label.setText(f'Auto exported {n:,} trades → {filepath}')
