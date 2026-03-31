@@ -165,9 +165,9 @@ class TradeRecorderWindow(QWidget):
         layout.addWidget(self._conn_label)
 
         # ── Recent Trades Table ──
-        self._table = QTableWidget(0, 7)
+        self._table = QTableWidget(0, 8)
         self._table.setHorizontalHeaderLabels(
-            ['Time', 'Exchange', 'Symbol', 'Price', 'Qty', 'Side', 'USD'])
+            ['Time', 'Exchange', 'Symbol', 'Trade ID', 'Price', 'Qty', 'Side', 'USD'])
         self._table.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.Stretch)
         self._table.setSelectionBehavior(
@@ -291,16 +291,17 @@ class TradeRecorderWindow(QWidget):
             self._table.setItem(row, 0, QTableWidgetItem(t['datetime']))
             self._table.setItem(row, 1, QTableWidgetItem(t['exchange']))
             self._table.setItem(row, 2, QTableWidgetItem(t['symbol']))
-            self._table.setItem(row, 3, QTableWidgetItem(f"${t['price']:,.2f}"))
+            self._table.setItem(row, 3, QTableWidgetItem(t.get('trade_id', '')))
+            self._table.setItem(row, 4, QTableWidgetItem(f"${t['price']:,.2f}"))
 
             qty_item = QTableWidgetItem(f"{t['qty']:.6f}")
-            self._table.setItem(row, 4, qty_item)
+            self._table.setItem(row, 5, qty_item)
 
             side_item = QTableWidgetItem(t['side'].upper())
             side_item.setForeground(QColor(_GREEN) if t['side'] == 'buy' else QColor(_RED))
-            self._table.setItem(row, 5, side_item)
+            self._table.setItem(row, 6, side_item)
 
-            self._table.setItem(row, 6, QTableWidgetItem(f"${t['usd_value']:,.2f}"))
+            self._table.setItem(row, 7, QTableWidgetItem(f"${t['usd_value']:,.2f}"))
 
     def closeEvent(self, event):
         self._timer.stop()

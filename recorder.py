@@ -32,7 +32,7 @@ class TradeRecorder:
         self._start_time = time.time()
 
     def add(self, exchange: str, symbol: str, price: float, qty: float,
-            side: str, ts_ms: int):
+            side: str, ts_ms: int, trade_id: str = ''):
         """記錄一筆成交."""
         trade = {
             'timestamp_ms': ts_ms,
@@ -40,6 +40,7 @@ class TradeRecorder:
                                       time.localtime(ts_ms / 1000)),
             'exchange': exchange,
             'symbol': symbol,
+            'trade_id': trade_id,
             'price': price,
             'qty': qty,
             'side': side,
@@ -81,7 +82,7 @@ class TradeRecorder:
             return 0
 
         fields = ['timestamp_ms', 'datetime', 'exchange', 'symbol',
-                  'price', 'qty', 'side', 'usd_value']
+                  'trade_id', 'price', 'qty', 'side', 'usd_value']
 
         with open(filepath, 'w', newline='', encoding='utf-8') as f:
             writer = csv.DictWriter(f, fieldnames=fields)
@@ -219,38 +220,42 @@ EXCHANGE_CONFIG = {
 
 
 def parse_trade(exchange: str, msg: dict) -> list[tuple]:
-    """解析成交訊息 → [(symbol, price, qty, side, ts_ms), ...]"""
+    """解析成交訊息 → [(symbol, price, qty, side, ts_ms, trade_id), ...]"""
     try:
         if exchange == 'binance':
             if msg.get('e') == 'aggTrade':
                 side = 'sell' if msg['m'] else 'buy'
                 return [(msg['s'], float(msg['p']), float(msg['q']),
-                         side, msg['T'])]
+                         side, msg['T'], str(msg.get('a', '')))]
 
         elif exchange == 'bybit':
             if msg.get('topic', '').startswith('publicTrade.'):
                 return [(t['s'], float(t['p']), float(t['v']),
-                         t['S'].lower(), int(t['T']))
+                         t['S'].lower(), int(t['T']),
+                         str(t.get('i', '')))
                         for t in msg.get('data', [])]
 
         elif exchange == 'okx':
             if msg.get('arg', {}).get('channel') == 'trades':
                 return [(t['instId'], float(t['px']), float(t['sz']),
-                         t['side'], int(t['ts']))
+                         t['side'], int(t['ts']),
+                         str(t.get('tradeId', '')))
                         for t in msg.get('data', [])]
 
         elif exchange == 'bitget':
             if msg.get('action') == 'snapshot' and msg.get('data'):
                 sym = msg.get('arg', {}).get('instId', '')
                 return [(sym, float(t['price']), float(t['size']),
-                         t['side'], int(t['ts']))
+                         t['side'], int(t['ts']),
+                         str(t.get('tradeId', '')))
                         for t in msg['data']]
 
         elif exchange == 'gateio':
             if msg.get('event') == 'update' and msg.get('channel') == 'futures.trades':
                 return [(t['contract'], float(t['price']), abs(float(t['size'])),
                          'buy' if float(t['size']) > 0 else 'sell',
-                         int(t.get('create_time_ms', time.time() * 1000)))
+                         int(t.get('create_time_ms', time.time() * 1000)),
+                         str(t.get('id', '')))
                         for t in msg.get('result', [])]
 
         elif exchange == 'mexc':
@@ -258,20 +263,23 @@ def parse_trade(exchange: str, msg: dict) -> list[tuple]:
                 sym = msg.get('symbol', '')
                 return [(sym, float(t['p']), float(t['v']),
                          'buy' if t.get('T') == 1 else 'sell',
-                         int(float(t.get('t', 0)) * 1000))
+                         int(float(t.get('t', 0)) * 1000),
+                         str(t.get('t', '')))
                         for t in msg['data']]
 
         elif exchange == 'hyperliquid':
             if msg.get('channel') == 'trades':
                 return [(t.get('coin', ''), float(t['px']), float(t['sz']),
                          'buy' if t.get('side') == 'B' else 'sell',
-                         int(t.get('time', time.time() * 1000)))
+                         int(t.get('time', time.time() * 1000)),
+                         str(t.get('tid', t.get('hash', ''))))
                         for t in msg.get('data', [])]
 
         elif exchange == 'deribit':
             if msg.get('params', {}).get('data'):
                 return [(t['instrument_name'], float(t['price']), float(t['amount']),
-                         t['direction'], t['timestamp'])
+                         t['direction'], t['timestamp'],
+                         str(t.get('trade_id', '')))
                         for t in msg['params']['data']]
 
         elif exchange == 'bitmex':
@@ -279,7 +287,8 @@ def parse_trade(exchange: str, msg: dict) -> list[tuple]:
                 return [(t['symbol'], float(t['price']),
                          abs(float(t.get('homeNotional', t.get('size', 0)))),
                          t.get('side', '').lower(),
-                         int(time.time() * 1000))
+                         int(time.time() * 1000),
+                         str(t.get('trdMatchID', '')))
                         for t in msg['data']]
 
         elif exchange == 'dydx':
@@ -287,7 +296,8 @@ def parse_trade(exchange: str, msg: dict) -> list[tuple]:
                 sym = msg.get('id', '')
                 return [(sym, float(t['price']), float(t['size']),
                          t['side'].lower(),
-                         int(time.time() * 1000))
+                         int(time.time() * 1000),
+                         str(t.get('id', '')))
                         for t in msg.get('contents', {}).get('trades', [])]
 
         elif exchange == 'phemex':
@@ -295,7 +305,8 @@ def parse_trade(exchange: str, msg: dict) -> list[tuple]:
                 sym = msg.get('symbol', 'BTCUSDT')
                 return [(sym, float(t[2]), float(t[3]),
                          t[1].lower(),
-                         int(t[0]) // 1000000 if t[0] > 1e15 else int(t[0]))
+                         int(t[0]) // 1000000 if t[0] > 1e15 else int(t[0]),
+                         str(t[0]))
                         for t in msg['trades_p']]
 
         elif exchange == 'bitunix':
@@ -303,7 +314,8 @@ def parse_trade(exchange: str, msg: dict) -> list[tuple]:
                 sym = msg.get('symbol', '')
                 return [(sym, float(t['p']), float(t['v']),
                          t.get('s', 'sell'),
-                         int(time.time() * 1000))
+                         int(time.time() * 1000),
+                         str(t.get('id', '')))
                         for t in msg['data']]
 
         elif exchange == 'kraken':
@@ -314,7 +326,8 @@ def parse_trade(exchange: str, msg: dict) -> list[tuple]:
                     trades = [msg]
                 return [(t.get('product_id', ''), float(t['price']),
                          float(t['qty']), t.get('side', 'sell'),
-                         int(time.time() * 1000))
+                         int(time.time() * 1000),
+                         str(t.get('uid', '')))
                         for t in trades if 'price' in t]
 
         elif exchange == 'bingx':
@@ -323,7 +336,8 @@ def parse_trade(exchange: str, msg: dict) -> list[tuple]:
                 data = msg['data'] if isinstance(msg['data'], list) else [msg['data']]
                 return [(t.get('s', ''), float(t['p']), float(t['q']),
                          'sell' if t.get('m') else 'buy',
-                         int(t.get('T', time.time() * 1000)))
+                         int(t.get('T', time.time() * 1000)),
+                         str(t.get('T', '')))
                         for t in data]
 
         elif exchange == 'coinbase':
@@ -331,7 +345,8 @@ def parse_trade(exchange: str, msg: dict) -> list[tuple]:
                 side = 'buy' if msg.get('side') == 'sell' else 'sell'
                 return [(msg.get('product_id', ''), float(msg['price']),
                          float(msg['size']), side,
-                         int(time.time() * 1000))]
+                         int(time.time() * 1000),
+                         str(msg.get('trade_id', '')))]
 
         elif exchange == 'htx':
             ch = msg.get('ch', '')
@@ -340,7 +355,8 @@ def parse_trade(exchange: str, msg: dict) -> list[tuple]:
                 sym = parts[1] if len(parts) > 1 else ''
                 return [(sym, float(t['price']), float(t['amount']),
                          t['direction'],
-                         int(t.get('ts', time.time() * 1000)))
+                         int(t.get('ts', time.time() * 1000)),
+                         str(t.get('id', '')))
                         for t in msg.get('tick', {}).get('data', [])]
 
     except Exception:
@@ -452,10 +468,11 @@ class RecorderWorker(threading.Thread):
                         msg = json.loads(raw) if isinstance(raw, str) else json.loads(raw.decode())
                         trades = parse_trade(self._exchange, msg)
 
-                        for sym, price, qty, side, ts_ms in trades:
+                        for sym, price, qty, side, ts_ms, tid in trades:
                             if price > 0 and qty > 0:
                                 self._recorder.add(
-                                    cfg['name'], sym, price, qty, side, ts_ms)
+                                    cfg['name'], sym, price, qty, side,
+                                    ts_ms, tid)
                                 self._trade_count += 1
 
                     except Exception:
